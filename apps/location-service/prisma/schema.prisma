@@ -1,0 +1,22 @@
+// Location Service — Prisma Schema
+// Schema: location (isolated from other services)
+// DATABASE_URL must include ?schema=location so Prisma targets the correct schema.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/infrastructure/persistence/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model UserAreaState {
+  userId    String   @map("user_id") @db.Uuid
+  areaId    String   @map("area_id") @db.Uuid
+  updatedAt DateTime @default(dbgenerated("NOW()")) @map("updated_at") @db.Timestamptz()
+
+  @@id([userId, areaId])
+  @@map("user_area_state")
+}

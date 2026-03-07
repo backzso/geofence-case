@@ -100,3 +100,4 @@ Thumbs.db
 
 # Prisma custom output
 apps/geofence-service/src/infrastructure/persistence/generated/
+apps/location-service/src/infrastructure/persistence/generated/

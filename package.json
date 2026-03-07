@@ -9,6 +9,9 @@
   "scripts": {
     "build:geofence": "npm run build --workspace=apps/geofence-service",
     "start:geofence": "npm run start --workspace=apps/geofence-service",
-    "start:dev:geofence": "npm run start:dev --workspace=apps/geofence-service"
+    "start:dev:geofence": "npm run start:dev --workspace=apps/geofence-service",
+    "build:location": "npm run build --workspace=apps/location-service",
+    "start:location": "npm run start --workspace=apps/location-service",
+    "start:dev:location": "npm run start:dev --workspace=apps/location-service"
   }
 }
