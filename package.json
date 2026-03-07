@@ -1,0 +1,14 @@
+{
+  "name": "geofence-mono",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "libs/*"
+  ],
+  "scripts": {
+    "build:geofence": "npm run build --workspace=apps/geofence-service",
+    "start:geofence": "npm run start --workspace=apps/geofence-service",
+    "start:dev:geofence": "npm run start:dev --workspace=apps/geofence-service"
+  }
+}
