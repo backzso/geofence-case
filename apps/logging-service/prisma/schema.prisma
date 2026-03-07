@@ -1,0 +1,24 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/infrastructure/persistence/generated"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// DATABASE_URL must include ?schema=logging to set the PostgreSQL search_path.
+// Prisma resolves all model names within that schema automatically.
+
+model AreaTransitionLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId    String   @unique @map("event_id") @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  areaId     String   @map("area_id") @db.Uuid
+  eventType  String   @map("event_type") @db.VarChar(32)
+  occurredAt DateTime @map("occurred_at") @db.Timestamptz()
+  receivedAt DateTime @default(dbgenerated("NOW()")) @map("received_at") @db.Timestamptz()
+
+  @@map("area_transition_logs")
+}

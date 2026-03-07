@@ -12,6 +12,9 @@
     "start:dev:geofence": "npm run start:dev --workspace=apps/geofence-service",
     "build:location": "npm run build --workspace=apps/location-service",
     "start:location": "npm run start --workspace=apps/location-service",
-    "start:dev:location": "npm run start:dev --workspace=apps/location-service"
+    "start:dev:location": "npm run start:dev --workspace=apps/location-service",
+    "build:logging": "npm run build --workspace=apps/logging-service",
+    "start:logging": "npm run start --workspace=apps/logging-service",
+    "start:dev:logging": "npm run start:dev --workspace=apps/logging-service"
   }
 }
