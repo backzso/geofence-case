@@ -113,6 +113,10 @@ Amaç:
 **Scenario:** `GET /health` when `location.user_area_state` has zero rows  
 **Expected:** healthy if DB readiness query succeeds
 
+### LOCATION-015 — Phantom stale replay on empty state
+**Scenario:** user enters area (T1), exits all areas (T2), then sends stale inside event (T0 < T1 < T2)  
+**Expected:** Event is rejected based on `user_processing_watermarks`, returning no transitions instead of a fresh ENTER.
+
 ---
 
 ## 3. Logging Service Edge Cases
