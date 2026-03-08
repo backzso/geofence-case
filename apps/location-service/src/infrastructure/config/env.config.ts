@@ -46,6 +46,15 @@ class EnvironmentVariables {
     @IsString()
     @IsNotEmpty()
     KAFKA_TOPIC_AREA_TRANSITIONS: string;
+
+    @IsInt()
+    @Min(500)
+    OUTBOX_POLL_INTERVAL_MS: number;
+
+    @IsInt()
+    @Min(1)
+    @Max(500)
+    OUTBOX_BATCH_SIZE: number;
 }
 
 /**

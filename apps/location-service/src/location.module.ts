@@ -2,16 +2,20 @@ import { Module } from '@nestjs/common';
 
 import { GEOFENCE_READ_REPOSITORY } from './application/ports/geofence-read.repository.port';
 import { USER_AREA_STATE_REPOSITORY } from './application/ports/user-area-state.repository.port';
-import { AREA_TRANSITION_PUBLISHER } from './application/ports/area-transition.publisher.port';
+import { OUTBOX_EVENT_REPOSITORY } from './application/ports/outbox-event.repository.port';
+import { OUTBOX_PUBLISHER } from './application/ports/outbox.publisher.port';
 import { LOCATION_TRANSACTION_MANAGER } from './application/ports/location-transaction.manager.port';
 
 import { ProcessLocationUseCase } from './application/use-cases/process-location.use-case';
+import { DispatchPendingOutboxEventsUseCase } from './application/use-cases/dispatch-pending-outbox-events.use-case';
 
 import { PrismaService } from './infrastructure/persistence/prisma.service';
 import { PrismaGeofenceReadRepository } from './infrastructure/persistence/prisma-geofence-read.repository';
 import { PrismaUserAreaStateRepository } from './infrastructure/persistence/prisma-user-area-state.repository';
 import { PrismaLocationTransactionManager } from './infrastructure/persistence/prisma-location-transaction.manager';
-import { KafkaAreaTransitionPublisher } from './infrastructure/messaging/kafka-area-transition.publisher';
+import { PrismaOutboxEventRepository } from './infrastructure/persistence/prisma-outbox-event.repository';
+import { KafkaOutboxPublisher } from './infrastructure/messaging/kafka-outbox.publisher';
+import { OutboxPollerService } from './infrastructure/messaging/outbox-poller.service';
 
 import { LocationsController } from './presentation/controllers/locations.controller';
 import { HealthController } from './presentation/controllers/health.controller';
@@ -19,28 +23,24 @@ import { HealthController } from './presentation/controllers/health.controller';
 /**
  * LocationModule
  *
- * Wires together all layers of the Location Service:
+ * Wires together all layers of the Location Service.
  *
- *   Infrastructure:
- *     - PrismaService                    — DB connection lifecycle
- *     - PrismaGeofenceReadRepository     → IGeofenceReadRepository port
- *     - PrismaUserAreaStateRepository    → IUserAreaStateRepository port
- *     - PrismaLocationTransactionManager → ILocationTransactionManager port
- *     - KafkaAreaTransitionPublisher     → IAreaTransitionPublisher port
+ * OUTBOX PATTERN additions (v2):
+ *   - PrismaOutboxEventRepository  → IOutboxEventRepository port
+ *   - KafkaOutboxPublisher         → IOutboxPublisher port
+ *   - DispatchPendingOutboxEventsUseCase
+ *   - OutboxPollerService          — lifecycle-managed polling loop
  *
- *   Application:
- *     - ProcessLocationUseCase           — injected with all 4 ports
- *
- *   Presentation:
- *     - LocationsController              — POST /locations
- *     - HealthController                 — GET /health
- *
- * Symbol tokens are used for port bindings to avoid magic strings.
+ * Removed:
+ *   - KafkaAreaTransitionPublisher  (no longer used — Kafka is async via outbox)
+ *   - AREA_TRANSITION_PUBLISHER binding
  */
 @Module({
     controllers: [LocationsController, HealthController],
     providers: [
         PrismaService,
+
+        // Persistence repositories
         {
             provide: GEOFENCE_READ_REPOSITORY,
             useClass: PrismaGeofenceReadRepository,
@@ -50,14 +50,28 @@ import { HealthController } from './presentation/controllers/health.controller';
             useClass: PrismaUserAreaStateRepository,
         },
         {
-            provide: AREA_TRANSITION_PUBLISHER,
-            useClass: KafkaAreaTransitionPublisher,
+            provide: OUTBOX_EVENT_REPOSITORY,
+            useClass: PrismaOutboxEventRepository,
         },
+
+        // Transaction manager
         {
             provide: LOCATION_TRANSACTION_MANAGER,
             useClass: PrismaLocationTransactionManager,
         },
+
+        // Outbox publisher
+        {
+            provide: OUTBOX_PUBLISHER,
+            useClass: KafkaOutboxPublisher,
+        },
+
+        // Use cases
         ProcessLocationUseCase,
+        DispatchPendingOutboxEventsUseCase,
+
+        // Infrastructure services
+        OutboxPollerService,
     ],
 })
 export class LocationModule { }

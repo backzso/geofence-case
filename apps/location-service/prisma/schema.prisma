@@ -20,3 +20,23 @@ model UserAreaState {
   @@id([userId, areaId])
   @@map("user_area_state")
 }
+
+// Outbox events — inserted atomically with user_area_state mutations.
+// Claimed by OutboxPollerService and published to Kafka asynchronously.
+model OutboxEvent {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  eventId       String    @unique @map("event_id") @db.Uuid
+  aggregateType String    @map("aggregate_type") @db.VarChar(64)
+  aggregateId   String?   @map("aggregate_id") @db.Uuid
+  eventType     String    @map("event_type") @db.VarChar(64)
+  partitionKey  String    @map("partition_key") @db.VarChar(128)
+  payload       Json      @map("payload")
+  status        String    @default("pending") @db.VarChar(16)
+  attempts      Int       @default(0)
+  availableAt   DateTime  @default(dbgenerated("NOW()")) @map("available_at") @db.Timestamptz()
+  publishedAt   DateTime? @map("published_at") @db.Timestamptz()
+  createdAt     DateTime  @default(dbgenerated("NOW()")) @map("created_at") @db.Timestamptz()
+  updatedAt     DateTime  @default(dbgenerated("NOW()")) @map("updated_at") @db.Timestamptz()
+
+  @@map("outbox_events")
+}

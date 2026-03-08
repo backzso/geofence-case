@@ -17,10 +17,10 @@ import {
     IUserAreaStateRepository,
 } from '../ports/user-area-state.repository.port';
 import {
-    AREA_TRANSITION_PUBLISHER,
-    IAreaTransitionPublisher,
-    AreaTransitionEvent,
-} from '../ports/area-transition.publisher.port';
+    OUTBOX_EVENT_REPOSITORY,
+    IOutboxEventRepository,
+    OutboxEventInput,
+} from '../ports/outbox-event.repository.port';
 import {
     LOCATION_TRANSACTION_MANAGER,
     ILocationTransactionManager,
@@ -43,23 +43,29 @@ export interface ProcessLocationResult {
 /**
  * ProcessLocationUseCase
  *
- * Orchestrates the full location processing pipeline:
+ * Orchestrates the full location processing pipeline with the Transactional Outbox Pattern.
  *
- *   1. Build domain value objects (validates input)
- *   2. Spatial query — find containing areas via PostGIS (outside transaction)
- *   3. Transactional state reconciliation (inside advisory-locked transaction):
+ * Flow:
+ *   1. Build and validate domain value objects
+ *   2. Spatial query — find containing areas via PostGIS (OUTSIDE transaction — intentional tradeoff)
+ *   3. Advisory-locked transaction:
  *      a. Load previous inside-state
  *      b. Staleness check — reject if MAX(updated_at) > incoming timestamp
  *      c. Compute transitions via pure domain logic
- *      d. Persist state changes
- *   4. Generate domain events (after DB commit)
- *   5. Publish events to Kafka (after DB commit)
- *   6. Return result
+ *      d. Persist user_area_state mutation
+ *      e. Insert outbox_events rows for each transition event (same tx — atomic)
+ *      f. COMMIT (state mutation + outbox intent are atomically durable)
+ *   4. Return result
  *
- * The spatial query runs OUTSIDE the advisory-locked transaction.
- * This is an intentional performance/consistency tradeoff:
+ * Kafka publish has been REMOVED from the request path.
+ * Kafka events are published asynchronously by the OutboxPollerService.
+ *
+ * This guarantees that if the DB transaction commits, the event intent is never lost —
+ * even if the process crashes immediately after step 3f.
+ *
+ * The spatial query runs OUTSIDE the advisory-locked transaction (intentional tradeoff):
  *   - Geofence mutations are rare administrative operations
- *   - Holding the lock during spatial index scans would degrade throughput
+ *   - Holding the lock during spatial index scans degrades throughput
  *   - The transactional state reconciliation ensures correctness regardless
  *
  * No raw SQL. No Prisma. No Kafka. No HTTP concerns.
@@ -71,8 +77,8 @@ export class ProcessLocationUseCase {
         private readonly geofenceReadRepo: IGeofenceReadRepository,
         @Inject(USER_AREA_STATE_REPOSITORY)
         private readonly userAreaStateRepo: IUserAreaStateRepository,
-        @Inject(AREA_TRANSITION_PUBLISHER)
-        private readonly transitionPublisher: IAreaTransitionPublisher,
+        @Inject(OUTBOX_EVENT_REPOSITORY)
+        private readonly outboxRepo: IOutboxEventRepository,
         @Inject(LOCATION_TRANSACTION_MANAGER)
         private readonly transactionManager: ILocationTransactionManager,
     ) { }
@@ -83,16 +89,14 @@ export class ProcessLocationUseCase {
         const point = GeoPoint.create(command.lat, command.lon);
         const timestamp = LocationTimestamp.create(command.timestamp);
 
-        // 2. Spatial query — OUTSIDE transaction (intentional tradeoff)
-        //    Find which geofence areas contain this point via PostGIS ST_Covers.
+        // 2. Spatial query — OUTSIDE transaction (intentional tradeoff documented in plan)
         const currentInsideAreaIds = await this.geofenceReadRepo.findContainingAreaIds(
             point.lon,
             point.lat,
         );
         const currentInsideSet = new Set(currentInsideAreaIds);
 
-        // 3. Transactional state reconciliation
-        //    Advisory lock serializes concurrent requests for the same userId.
+        // 3. Advisory-locked transactional block
         const { enteredAreaIds, exitedAreaIds } =
             await this.transactionManager.executeInTransaction(
                 userId.value,
@@ -104,8 +108,6 @@ export class ProcessLocationUseCase {
                     );
 
                     // 3b. Staleness check — MAX(updated_at) semantics
-                    //     If the newest persisted timestamp is newer than the incoming event,
-                    //     this request is stale: no mutations, no transitions, no events.
                     if (previousRecords.length > 0) {
                         const maxUpdatedAt = previousRecords.reduce(
                             (max, record) =>
@@ -127,11 +129,12 @@ export class ProcessLocationUseCase {
                         currentInsideSet,
                     );
 
-                    // 3d. Persist state changes
-                    if (
+                    const hasTransitions =
                         transitions.enteredAreaIds.length > 0 ||
-                        transitions.exitedAreaIds.length > 0
-                    ) {
+                        transitions.exitedAreaIds.length > 0;
+
+                    if (hasTransitions) {
+                        // 3d. Persist state changes
                         await this.userAreaStateRepo.applyStateChanges(
                             userId.value,
                             transitions.enteredAreaIds,
@@ -139,49 +142,73 @@ export class ProcessLocationUseCase {
                             timestamp.value,
                             tx,
                         );
+
+                        // 3e. Build domain events and derive outbox inputs
+                        const isoTimestamp = timestamp.value.toISOString();
+                        const outboxInputs: OutboxEventInput[] = [];
+
+                        for (const areaId of transitions.enteredAreaIds) {
+                            const domainEvent = new UserEnteredAreaEvent({
+                                eventId: uuidv4(),
+                                userId: userId.value,
+                                areaId,
+                                timestamp: isoTimestamp,
+                            });
+                            outboxInputs.push({
+                                eventId: domainEvent.eventId,
+                                aggregateType: 'UserAreaState',
+                                aggregateId: userId.value,
+                                eventType: domainEvent.type,
+                                partitionKey: userId.value,
+                                payload: {
+                                    eventId: domainEvent.eventId,
+                                    type: domainEvent.type,
+                                    userId: domainEvent.userId,
+                                    areaId: domainEvent.areaId,
+                                    timestamp: domainEvent.timestamp,
+                                },
+                            });
+                        }
+
+                        for (const areaId of transitions.exitedAreaIds) {
+                            const domainEvent = new UserExitedAreaEvent({
+                                eventId: uuidv4(),
+                                userId: userId.value,
+                                areaId,
+                                timestamp: isoTimestamp,
+                            });
+                            outboxInputs.push({
+                                eventId: domainEvent.eventId,
+                                aggregateType: 'UserAreaState',
+                                aggregateId: userId.value,
+                                eventType: domainEvent.type,
+                                partitionKey: userId.value,
+                                payload: {
+                                    eventId: domainEvent.eventId,
+                                    type: domainEvent.type,
+                                    userId: domainEvent.userId,
+                                    areaId: domainEvent.areaId,
+                                    timestamp: domainEvent.timestamp,
+                                },
+                            });
+                        }
+
+                        // 3f. Insert outbox rows in the SAME transaction as state mutation.
+                        // If the transaction commits, both state and event intent are durable.
+                        // If the transaction rolls back, neither persists.
+                        await this.outboxRepo.insertBatch(outboxInputs, tx);
                     }
 
                     return transitions;
                 },
             );
 
-        // 4. Generate domain events — AFTER transaction committed
-        const events: AreaTransitionEvent[] = [];
-        const isoTimestamp = timestamp.value.toISOString();
-
-        for (const areaId of enteredAreaIds) {
-            events.push(
-                new UserEnteredAreaEvent({
-                    eventId: uuidv4(),
-                    userId: userId.value,
-                    areaId,
-                    timestamp: isoTimestamp,
-                }),
-            );
-        }
-
-        for (const areaId of exitedAreaIds) {
-            events.push(
-                new UserExitedAreaEvent({
-                    eventId: uuidv4(),
-                    userId: userId.value,
-                    areaId,
-                    timestamp: isoTimestamp,
-                }),
-            );
-        }
-
-        // 5. Publish events — AFTER transaction committed
-        if (events.length > 0) {
-            await this.transitionPublisher.publishTransitions(events);
-        }
-
-        // 6. Return result
+        // 4. Return result — Kafka publish happens asynchronously via OutboxPollerService
         return {
             userId: userId.value,
             enteredAreaIds,
             exitedAreaIds,
-            timestamp: isoTimestamp,
+            timestamp: timestamp.value.toISOString(),
         };
     }
 }
