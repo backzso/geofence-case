@@ -40,3 +40,12 @@ model OutboxEvent {
 
   @@map("outbox_events")
 }
+
+// User-level watermark to prevent stale event processing even when user_area_state is empty.
+model UserProcessingWatermark {
+  userId          String   @id @map("user_id") @db.Uuid
+  lastProcessedAt DateTime @map("last_processed_at") @db.Timestamptz()
+  updatedAt       DateTime @default(dbgenerated("NOW()")) @map("updated_at") @db.Timestamptz()
+
+  @@map("user_processing_watermarks")
+}

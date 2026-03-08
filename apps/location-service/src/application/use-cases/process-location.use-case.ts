@@ -22,6 +22,10 @@ import {
     OutboxEventInput,
 } from '../ports/outbox-event.repository.port';
 import {
+    USER_PROCESSING_WATERMARK_REPOSITORY,
+    IUserProcessingWatermarkRepository,
+} from '../ports/user-processing-watermark.repository.port';
+import {
     LOCATION_TRANSACTION_MANAGER,
     ILocationTransactionManager,
 } from '../ports/location-transaction.manager.port';
@@ -79,6 +83,8 @@ export class ProcessLocationUseCase {
         private readonly userAreaStateRepo: IUserAreaStateRepository,
         @Inject(OUTBOX_EVENT_REPOSITORY)
         private readonly outboxRepo: IOutboxEventRepository,
+        @Inject(USER_PROCESSING_WATERMARK_REPOSITORY)
+        private readonly watermarkRepo: IUserProcessingWatermarkRepository,
         @Inject(LOCATION_TRANSACTION_MANAGER)
         private readonly transactionManager: ILocationTransactionManager,
     ) { }
@@ -101,13 +107,19 @@ export class ProcessLocationUseCase {
             await this.transactionManager.executeInTransaction(
                 userId.value,
                 async (tx) => {
-                    // 3a. Load previous inside-state
+                    // 3a. Check user processing watermark first (stale rejection even without active areas)
+                    const watermark = await this.watermarkRepo.findWatermark(userId.value, tx);
+                    if (watermark && watermark.lastProcessedAt >= timestamp.value) {
+                        return { enteredAreaIds: [], exitedAreaIds: [] };
+                    }
+
+                    // 3b. Load previous inside-state
                     const previousRecords = await this.userAreaStateRepo.loadInsideAreas(
                         userId.value,
                         tx,
                     );
 
-                    // 3b. Staleness check — MAX(updated_at) semantics
+                    // 3c. Staleness check — MAX(updated_at) semantics (fallback for missing watermark)
                     if (previousRecords.length > 0) {
                         const maxUpdatedAt = previousRecords.reduce(
                             (max, record) =>
@@ -115,12 +127,12 @@ export class ProcessLocationUseCase {
                             previousRecords[0].updatedAt,
                         );
 
-                        if (maxUpdatedAt > timestamp.value) {
+                        if (maxUpdatedAt >= timestamp.value) {
                             return { enteredAreaIds: [], exitedAreaIds: [] };
                         }
                     }
 
-                    // 3c. Compute transitions — pure domain logic
+                    // 3d. Compute transitions — pure domain logic
                     const previousInsideSet = new Set(
                         previousRecords.map((r) => r.areaId),
                     );
@@ -134,7 +146,7 @@ export class ProcessLocationUseCase {
                         transitions.exitedAreaIds.length > 0;
 
                     if (hasTransitions) {
-                        // 3d. Persist state changes
+                        // 3e. Persist state changes
                         await this.userAreaStateRepo.applyStateChanges(
                             userId.value,
                             transitions.enteredAreaIds,
@@ -143,7 +155,7 @@ export class ProcessLocationUseCase {
                             tx,
                         );
 
-                        // 3e. Build domain events and derive outbox inputs
+                        // 3f. Build domain events and derive outbox inputs
                         const isoTimestamp = timestamp.value.toISOString();
                         const outboxInputs: OutboxEventInput[] = [];
 
@@ -193,11 +205,14 @@ export class ProcessLocationUseCase {
                             });
                         }
 
-                        // 3f. Insert outbox rows in the SAME transaction as state mutation.
+                        // 3g. Insert outbox rows in the SAME transaction as state mutation.
                         // If the transaction commits, both state and event intent are durable.
                         // If the transaction rolls back, neither persists.
                         await this.outboxRepo.insertBatch(outboxInputs, tx);
                     }
+
+                    // 3h. Update processing watermark
+                    await this.watermarkRepo.upsertWatermark(userId.value, timestamp.value, tx);
 
                     return transitions;
                 },
