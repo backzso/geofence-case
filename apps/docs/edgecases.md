@@ -117,6 +117,10 @@ Amaç:
 **Scenario:** user enters area (T1), exits all areas (T2), then sends stale inside event (T0 < T1 < T2)  
 **Expected:** Event is rejected based on `user_processing_watermarks`, returning no transitions instead of a fresh ENTER.
 
+### LOCATION-016 — Exact timestamp duplicate replay
+**Scenario:** user sends an event with the exact same millisecond timestamp as they previously sent, which is identical to the current user processing watermark  
+**Expected:** Event is rejected because watermark `>= timestamp` and `maxUpdatedAt >= timestamp` checks block strictly identical times, preventing phantom exits if underlying geofences changed between the time the first packet and the retry were processed.
+
 ---
 
 ## 3. Logging Service Edge Cases
