@@ -15,14 +15,7 @@ export interface OutboxEventProps {
 }
 
 /**
- * OutboxEvent — Domain Entity
- *
- * Represents a single pending transition event in the transactional outbox.
- * Inserted in the same DB transaction as user_area_state mutation.
- * Claimed atomically by the outbox poller (status: pending → processing).
- * Finalized to 'published' on Kafka ACK, or reset to 'pending' on failure.
- *
- * Zero dependency on NestJS, Prisma, Kafka, or infrastructure.
+ * Domain representation of an outbox event.
  */
 export class OutboxEvent {
     readonly id: string;

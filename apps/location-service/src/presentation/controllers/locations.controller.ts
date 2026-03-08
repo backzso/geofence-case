@@ -4,15 +4,7 @@ import { ProcessLocationDto } from '../dto/process-location.dto';
 import { ProcessLocationResponseDto } from '../dto/process-location.response.dto';
 
 /**
- * LocationsController — Thin Presentation Layer
- *
- * Responsibilities:
- *   - Parse and validate HTTP input (delegated to ValidationPipe + DTO)
- *   - Invoke the use case
- *   - Map use case output to HTTP response DTO
- *   - Return the correct HTTP status code
- *
- * No business logic here. No direct repository, Prisma, or Kafka access.
+ * REST controller for location ingestion.
  */
 @Controller('locations')
 export class LocationsController {
@@ -20,12 +12,7 @@ export class LocationsController {
         private readonly processLocationUseCase: ProcessLocationUseCase,
     ) { }
 
-    /**
-     * POST /locations
-     *
-     * Ingests a user location ping and computes geofence transitions.
-     * Returns 200 with entered/exited area IDs.
-     */
+
     @Post()
     @HttpCode(HttpStatus.OK)
     async processLocation(

@@ -3,58 +3,47 @@ import { Prisma } from './generated';
 import { OutboxEvent } from '../../domain/entities/outbox-event.entity';
 import { OutboxEventStatus } from '../../domain/value-objects/outbox-event-status.value-object';
 import {
-    IOutboxEventRepository,
-    OutboxEventInput,
+  IOutboxEventRepository,
+  OutboxEventInput,
 } from '../../application/ports/outbox-event.repository.port';
 import { TransactionContext } from '../../application/ports/location-transaction.manager.port';
 import { PrismaService } from './prisma.service';
 
 type OutboxEventRow = {
-    id: string;
-    event_id: string;
-    aggregate_type: string;
-    aggregate_id: string | null;
-    event_type: string;
-    partition_key: string;
-    payload: unknown;
-    status: string;
-    attempts: number;
-    available_at: Date;
-    created_at: Date;
+  id: string;
+  event_id: string;
+  aggregate_type: string;
+  aggregate_id: string | null;
+  event_type: string;
+  partition_key: string;
+  payload: unknown;
+  status: string;
+  attempts: number;
+  available_at: Date;
+  created_at: Date;
 };
 
 /**
- * PrismaOutboxEventRepository
- *
- * Implements IOutboxEventRepository.
- *
- * insertBatch() — called inside advisory-locked tx via TransactionContext.
- *   Batched multi-row INSERT. Fails atomically with state mutation.
- *
- * claimPendingBatch() — opens its own short-lived transaction.
- *   Uses CTE + UPDATE to atomically transition pending → processing.
- *   Rows are invisible to other pollers after this transaction commits.
- *   SELECT FOR UPDATE SKIP LOCKED prevents duplicate claiming across replicas.
- *
- * markPublished() / resetToRetryable() — single-row UPDATEs, no transaction.
+ * Implements atomic outbox persistence and concurrent polling claims.
+ * Uses CTE + FOR UPDATE SKIP LOCKED to prevent duplicate claiming across workers.
  */
 @Injectable()
 export class PrismaOutboxEventRepository implements IOutboxEventRepository {
-    constructor(private readonly prisma: PrismaService) { }
+  constructor(private readonly prisma: PrismaService) { }
 
-    async insertBatch(
-        inputs: OutboxEventInput[],
-        tx: TransactionContext,
-    ): Promise<void> {
-        if (inputs.length === 0) return;
+  async insertBatch(
+    inputs: OutboxEventInput[],
+    tx: TransactionContext,
+  ): Promise<void> {
+    if (inputs.length === 0) return;
 
-        const client = tx as Prisma.TransactionClient;
+    const client = tx as Prisma.TransactionClient;
 
-        // Build value rows for batched insert
-        const valueRows = Prisma.join(
-            inputs.map(
-                (input) =>
-                    Prisma.sql`(
+    // Build value rows for batched insert
+    const valueRows = Prisma.join(
+      inputs.map(
+        (input) =>
+          Prisma.sql`(
             ${input.eventId}::uuid,
             ${input.aggregateType},
             ${input.aggregateId ?? null}::uuid,
@@ -63,22 +52,20 @@ export class PrismaOutboxEventRepository implements IOutboxEventRepository {
             ${JSON.stringify(input.payload)}::jsonb,
             'pending'
           )`,
-            ),
-        );
+      ),
+    );
 
-        await client.$executeRaw`
+    await client.$executeRaw`
       INSERT INTO location.outbox_events
         (event_id, aggregate_type, aggregate_id, event_type, partition_key, payload, status)
       VALUES ${valueRows}
     `;
-    }
+  }
 
-    async claimPendingBatch(limit: number): Promise<OutboxEvent[]> {
-        // Atomic claim: transition pending → processing using a CTE with FOR UPDATE SKIP LOCKED.
-        // The UPDATE commits within this transaction before Kafka I/O begins.
-        // After commit, claimed rows are in status='processing' and invisible to other pollers.
-        const rows = await this.prisma.$transaction(async (tx) => {
-            return tx.$queryRaw<OutboxEventRow[]>`
+  async claimPendingBatch(limit: number): Promise<OutboxEvent[]> {
+    // Atomic claim: FOR UPDATE SKIP LOCKED transitions rows to processing instantly.
+    const rows = await this.prisma.$transaction(async (tx) => {
+      return tx.$queryRaw<OutboxEventRow[]>`
         WITH claimed AS (
           SELECT id
           FROM location.outbox_events
@@ -105,44 +92,44 @@ export class PrismaOutboxEventRepository implements IOutboxEventRepository {
           o.available_at,
           o.created_at
       `;
-        });
+    });
 
-        return rows.map((row) => this.mapRow(row));
-    }
+    return rows.map((row) => this.mapRow(row));
+  }
 
-    async markPublished(id: string): Promise<void> {
-        await this.prisma.$executeRaw`
+  async markPublished(id: string): Promise<void> {
+    await this.prisma.$executeRaw`
       UPDATE location.outbox_events
       SET status = 'published',
           published_at = NOW(),
           updated_at = NOW()
       WHERE id = ${id}::uuid
     `;
-    }
+  }
 
-    async resetToRetryable(id: string): Promise<void> {
-        await this.prisma.$executeRaw`
+  async resetToRetryable(id: string): Promise<void> {
+    await this.prisma.$executeRaw`
       UPDATE location.outbox_events
       SET status = 'pending',
           attempts = attempts + 1,
           updated_at = NOW()
       WHERE id = ${id}::uuid
     `;
-    }
+  }
 
-    private mapRow(row: OutboxEventRow): OutboxEvent {
-        return new OutboxEvent({
-            id: row.id,
-            eventId: row.event_id,
-            aggregateType: row.aggregate_type,
-            aggregateId: row.aggregate_id,
-            eventType: row.event_type,
-            partitionKey: row.partition_key,
-            payload: row.payload as Record<string, unknown>,
-            status: OutboxEventStatus.from(row.status),
-            attempts: row.attempts,
-            availableAt: row.available_at,
-            createdAt: row.created_at,
-        });
-    }
+  private mapRow(row: OutboxEventRow): OutboxEvent {
+    return new OutboxEvent({
+      id: row.id,
+      eventId: row.event_id,
+      aggregateType: row.aggregate_type,
+      aggregateId: row.aggregate_id,
+      eventType: row.event_type,
+      partitionKey: row.partition_key,
+      payload: row.payload as Record<string, unknown>,
+      status: OutboxEventStatus.from(row.status),
+      attempts: row.attempts,
+      availableAt: row.available_at,
+      createdAt: row.created_at,
+    });
+  }
 }

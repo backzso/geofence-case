@@ -11,26 +11,9 @@ import { PersistAreaTransitionLogCommand } from '../../application/commands/pers
 import { DomainValidationError } from '../../domain/errors/domain-validation.error';
 
 /**
- * KafkaAreaTransitionConsumer
- *
- * Infrastructure component responsible for consuming area-transitions events.
- *
- * Lifecycle:
- *   onModuleInit  → connect, subscribe, start consumer loop
- *   onModuleDestroy → graceful disconnect
- *
- * Offset commit strategy: autoCommit: false
- *   Offsets are committed ONLY after a definitive outcome.
- *   Uses consumer.commitOffsets() with offset+1 (KafkaJS convention:
- *   commit the next offset to be fetched, not the current one).
- *
- *     - 'persisted'  → event saved → commit offset
- *     - 'duplicate'  → safe no-op via UNIQUE(event_id) → commit offset
- *     - invalid msg  → intentional skip (replay always fails) → commit offset
- *     - DB failure   → throw, offset NOT committed, KafkaJS will redeliver
- *
- * Raw Kafka payloads never reach the domain or use case.
- * This class parses the wire format and builds PersistAreaTransitionLogCommand.
+ * Manual offset commitment Kafka consumer.
+ * Commits offset ONLY on successful persistence, known duplicate, or terminal validation error.
+ * DB failures skip offset commit, relying on at-least-once redelivery.
  */
 @Injectable()
 export class KafkaAreaTransitionConsumer
@@ -64,10 +47,7 @@ export class KafkaAreaTransitionConsumer
         this.kafka = new Kafka({ clientId, brokers });
     }
 
-    /**
-     * Commits the given message's offset to Kafka.
-     * KafkaJS convention: commit offset+1 (the next offset to fetch).
-     */
+
     private async commitOffset(
         topic: string,
         partition: number,
@@ -95,7 +75,7 @@ export class KafkaAreaTransitionConsumer
             eachMessage: async ({ topic, partition, message }) => {
                 const rawValue = message.value?.toString();
 
-                // ── Step 1: Parse JSON ──────────────────────────────────────────
+
                 let parsed: Record<string, unknown>;
                 try {
                     parsed = JSON.parse(rawValue ?? '');
@@ -103,12 +83,12 @@ export class KafkaAreaTransitionConsumer
                     this.logger.warn(
                         `[${topic}/${partition}] Unparseable message — skipping. offset=${message.offset}`,
                     );
-                    // Intentional skip: replay would produce the same parse failure.
+
                     await this.commitOffset(topic, partition, message.offset);
                     return;
                 }
 
-                // ── Step 2: Validate required fields present ────────────────────
+
                 const { eventId, type, userId, areaId, timestamp } = parsed as {
                     eventId?: string;
                     type?: string;
@@ -137,7 +117,7 @@ export class KafkaAreaTransitionConsumer
                     return;
                 }
 
-                // ── Step 3: Build command and invoke use case ───────────────────
+
                 const command = new PersistAreaTransitionLogCommand();
                 command.eventId = eventId;
                 command.userId = userId;
@@ -159,12 +139,11 @@ export class KafkaAreaTransitionConsumer
                         );
                     }
 
-                    // Both 'persisted' and 'duplicate' are successful outcomes — commit.
+
                     await this.commitOffset(topic, partition, message.offset);
                 } catch (err) {
                     if (err instanceof DomainValidationError) {
-                        // Domain rejected the payload (e.g. unknown event type, bad UUID).
-                        // Replay would fail identically — intentional skip.
+                        // Terminal error. Replay will also fail. Commit and skip.
                         this.logger.warn(
                             `[${topic}/${partition}] Domain validation failed — skipping. eventId=${eventId} reason=${err.message}`,
                         );
@@ -172,8 +151,7 @@ export class KafkaAreaTransitionConsumer
                         return;
                     }
 
-                    // Unexpected DB failure or infrastructure error.
-                    // Do NOT commit offset — KafkaJS will redeliver this message.
+                    // DB/Infrastructure failure. Throw so KafkaJS will redeliver.
                     this.logger.error(
                         `[${topic}/${partition}] Unexpected error processing event. eventId=${eventId}`,
                         err instanceof Error ? err.stack : String(err),

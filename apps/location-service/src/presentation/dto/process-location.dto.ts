@@ -8,11 +8,7 @@ import {
 } from 'class-validator';
 
 /**
- * ProcessLocationDto
- *
- * HTTP input for POST /locations.
- * Validated by NestJS ValidationPipe before reaching the controller.
- * Invalid payloads are rejected with 400 before any use case runs.
+ * HTTP input DTO for POST /locations.
  */
 export class ProcessLocationDto {
     @IsUUID('all', { message: 'userId must be a valid UUID' })

@@ -1,21 +1,8 @@
 import { DomainValidationError } from '../errors/domain-validation.error';
 
 /**
- * GeoCircle — Value Object
- *
- * Represents the circle definition provided at area creation time.
- * This is a WRITE-PATH INPUT ONLY. It is never reconstructed from the database.
- *
- * The infrastructure layer uses GeoCircle's coordinates to emit the PostGIS
- * ST_Buffer(...) expression. After persistence, this value object is discarded —
- * the read path returns AreaSummary directly from scalar DB columns.
- *
- * Enforces:
- *   - centerLat: finite number in [-90, 90]
- *   - centerLon: finite number in [-180, 180]
- *   - radiusM:   finite number in [1, 100_000]
- *
- * No dependency on NestJS, Prisma, or any infrastructure concern.
+ * Write-path only representation of a circular geofence boundary.
+ * Translated by infrastructure into a PostGIS polygon.
  */
 export class GeoCircle {
   private readonly _centerLat: number;

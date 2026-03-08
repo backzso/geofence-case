@@ -6,15 +6,7 @@ import {
 } from '../ports/area-transition-log.repository.port';
 
 /**
- * GetAreaTransitionLogsUseCase
- *
- * Read-side use case for GET /logs.
- * Retrieves all stored transition logs ordered by occurred_at descending.
- *
- * Returns flat AreaTransitionLogReadModel[] — no domain VOs on read path.
- * Controller maps these to response DTOs.
- *
- * No business logic. No state mutation. No Kafka. No raw SQL.
+ * Read path for area transition logs.
  */
 @Injectable()
 export class GetAreaTransitionLogsUseCase {

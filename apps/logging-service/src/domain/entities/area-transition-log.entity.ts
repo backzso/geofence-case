@@ -13,12 +13,7 @@ export interface AreaTransitionLogProps {
 }
 
 /**
- * AreaTransitionLog — Domain Entity
- *
- * Represents an immutable audit record of a geofence transition event.
- * Constructed exclusively via static factory to enforce all invariants.
- *
- * No dependency on NestJS, Prisma, Kafka, or any infrastructure concern.
+ * Immutable audit record of a geofence transition.
  */
 export class AreaTransitionLog {
     readonly eventId: EventId;
@@ -41,10 +36,7 @@ export class AreaTransitionLog {
         this.occurredAt = props.occurredAt;
     }
 
-    /**
-     * Factory method — constructs all Value Objects.
-     * Throws DomainValidationError on any invariant violation.
-     */
+
     static create(props: AreaTransitionLogProps): AreaTransitionLog {
         return new AreaTransitionLog({
             eventId: EventId.create(props.eventId),

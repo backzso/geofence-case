@@ -7,18 +7,8 @@ import {
 } from '../ports/area-transition-log.repository.port';
 
 /**
- * PersistAreaTransitionLogUseCase
- *
- * Orchestrates the write path for a single transition event:
- *
- *   1. Build domain entity (validates all invariants via VOs)
- *   2. Delegate persistence to the repository port
- *   3. Return 'persisted' | 'duplicate' to the consumer
- *
- * DomainValidationError propagates to the caller (Kafka consumer),
- * which treats it as an intentional payload skip.
- *
- * No Prisma. No Kafka. No raw SQL.
+ * Write path for area transitions.
+ * Returns 'duplicate' if the eventId was already processed.
  */
 @Injectable()
 export class PersistAreaTransitionLogUseCase {

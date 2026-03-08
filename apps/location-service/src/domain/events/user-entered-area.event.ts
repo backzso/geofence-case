@@ -1,8 +1,5 @@
 /**
- * UserEnteredArea — Domain Event
- *
- * Emitted when a user transitions from outside to inside a geofence area.
- * Immutable data class — no behavior, no framework dependencies.
+ * Immutable domain event for entering a geofence.
  */
 export class UserEnteredAreaEvent {
     readonly eventId: string;

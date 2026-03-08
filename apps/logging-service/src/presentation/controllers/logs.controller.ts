@@ -3,12 +3,7 @@ import { GetAreaTransitionLogsUseCase } from '../../application/use-cases/get-ar
 import { AreaTransitionLogResponseDto } from '../dto/area-transition-log.response.dto';
 
 /**
- * LogsController — Thin Presentation Layer
- *
- * GET /logs — returns persisted transition logs ordered by occurred_at desc.
- *
- * Delegates to GetAreaTransitionLogsUseCase.
- * No business logic. No direct repository access.
+ * REST controller for audit logs.
  */
 @Controller('logs')
 export class LogsController {

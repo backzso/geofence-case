@@ -45,34 +45,13 @@ export interface ProcessLocationResult {
 }
 
 /**
- * ProcessLocationUseCase
- *
- * Orchestrates the full location processing pipeline with the Transactional Outbox Pattern.
- *
+ * Orchestrates location processing via Transactional Outbox Pattern.
+ * 
  * Flow:
- *   1. Build and validate domain value objects
- *   2. Spatial query — find containing areas via PostGIS (OUTSIDE transaction — intentional tradeoff)
- *   3. Advisory-locked transaction:
- *      a. Load previous inside-state
- *      b. Staleness check — reject if MAX(updated_at) > incoming timestamp
- *      c. Compute transitions via pure domain logic
- *      d. Persist user_area_state mutation
- *      e. Insert outbox_events rows for each transition event (same tx — atomic)
- *      f. COMMIT (state mutation + outbox intent are atomically durable)
- *   4. Return result
- *
- * Kafka publish has been REMOVED from the request path.
- * Kafka events are published asynchronously by the OutboxPollerService.
- *
- * This guarantees that if the DB transaction commits, the event intent is never lost —
- * even if the process crashes immediately after step 3f.
- *
- * The spatial query runs OUTSIDE the advisory-locked transaction (intentional tradeoff):
- *   - Geofence mutations are rare administrative operations
- *   - Holding the lock during spatial index scans degrades throughput
- *   - The transactional state reconciliation ensures correctness regardless
- *
- * No raw SQL. No Prisma. No Kafka. No HTTP concerns.
+ * 1. PostGIS spatial query (outside transaction to avoid long lock holds on index scans)
+ * 2. Advisory-locked transaction to prevent same-user race conditions
+ * 3. Watermark/staleness validation to prevent out-of-order execution
+ * 4. Atomic commit of state mutation + outbox event intent
  */
 @Injectable()
 export class ProcessLocationUseCase {
@@ -95,31 +74,31 @@ export class ProcessLocationUseCase {
         const point = GeoPoint.create(command.lat, command.lon);
         const timestamp = LocationTimestamp.create(command.timestamp);
 
-        // 2. Spatial query — OUTSIDE transaction (intentional tradeoff documented in plan)
+        // 1. Spatial query (Outside lock to maximize throughput)
         const currentInsideAreaIds = await this.geofenceReadRepo.findContainingAreaIds(
             point.lon,
             point.lat,
         );
         const currentInsideSet = new Set(currentInsideAreaIds);
 
-        // 3. Advisory-locked transactional block
+        // 2. Transactional processing under user-scoped advisory lock
         const { enteredAreaIds, exitedAreaIds } =
             await this.transactionManager.executeInTransaction(
                 userId.value,
                 async (tx) => {
-                    // 3a. Check user processing watermark first (stale rejection even without active areas)
+                    // 2a. Watermark check to reject stale/duplicate timestamps
                     const watermark = await this.watermarkRepo.findWatermark(userId.value, tx);
                     if (watermark && watermark.lastProcessedAt >= timestamp.value) {
                         return { enteredAreaIds: [], exitedAreaIds: [] };
                     }
 
-                    // 3b. Load previous inside-state
+                    // 2b. Load previous inside-state (under lock)
                     const previousRecords = await this.userAreaStateRepo.loadInsideAreas(
                         userId.value,
                         tx,
                     );
 
-                    // 3c. Staleness check — MAX(updated_at) semantics (fallback for missing watermark)
+                    // 2c. State staleness fallback check
                     if (previousRecords.length > 0) {
                         const maxUpdatedAt = previousRecords.reduce(
                             (max, record) =>
@@ -132,7 +111,7 @@ export class ProcessLocationUseCase {
                         }
                     }
 
-                    // 3d. Compute transitions — pure domain logic
+                    // 2d. Compute transitions via set-difference logic
                     const previousInsideSet = new Set(
                         previousRecords.map((r) => r.areaId),
                     );
@@ -146,7 +125,7 @@ export class ProcessLocationUseCase {
                         transitions.exitedAreaIds.length > 0;
 
                     if (hasTransitions) {
-                        // 3e. Persist state changes
+                        // 2e. Apply state mutation
                         await this.userAreaStateRepo.applyStateChanges(
                             userId.value,
                             transitions.enteredAreaIds,
@@ -155,7 +134,7 @@ export class ProcessLocationUseCase {
                             tx,
                         );
 
-                        // 3f. Build domain events and derive outbox inputs
+                        // 2f. Generate outbox intents
                         const isoTimestamp = timestamp.value.toISOString();
                         const outboxInputs: OutboxEventInput[] = [];
 
@@ -205,20 +184,18 @@ export class ProcessLocationUseCase {
                             });
                         }
 
-                        // 3g. Insert outbox rows in the SAME transaction as state mutation.
-                        // If the transaction commits, both state and event intent are durable.
-                        // If the transaction rolls back, neither persists.
+                        // 2g. Persist outbox intents atomically with state mutation
                         await this.outboxRepo.insertBatch(outboxInputs, tx);
                     }
 
-                    // 3h. Update processing watermark
+                    // 2h. Update user watermark
                     await this.watermarkRepo.upsertWatermark(userId.value, timestamp.value, tx);
 
                     return transitions;
                 },
             );
 
-        // 4. Return result — Kafka publish happens asynchronously via OutboxPollerService
+        // 3. Orchestration complete; Kafka publish handled asynchronously by poller
         return {
             userId: userId.value,
             enteredAreaIds,

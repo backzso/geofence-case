@@ -17,8 +17,7 @@ async function bootstrap() {
 
     app.useGlobalFilters(new HttpExceptionFilter());
 
-    // Enables NestJS to listen for shutdown signals (SIGTERM, SIGINT),
-    // triggering OnModuleDestroy for graceful Kafka + DB disconnects.
+    // Graceful shutdown hooks for Kafka/DB
     app.enableShutdownHooks();
 
     const port = process.env.PORT ?? 3002;

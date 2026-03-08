@@ -10,23 +10,8 @@ import {
 } from '../ports/outbox.publisher.port';
 
 /**
- * DispatchPendingOutboxEventsUseCase
- *
- * Application-layer orchestration for a single outbox polling cycle.
- *
- * Per-cycle flow:
- *   1. Claim up to OUTBOX_BATCH_SIZE pending rows atomically
- *      (each claimed row transitions: pending → processing in DB)
- *   2. For each claimed row, independently:
- *      a. Publish to Kafka via IOutboxPublisher
- *      b. On success:  markPublished(row.id)
- *      c. On failure:  resetToRetryable(row.id) — resets to pending, increments attempts
- *
- * Each row is finalized independently.
- * A Kafka failure for one row does not block or rollback other rows in the batch.
- *
- * No Prisma. No Kafka. No NestJS modules imported.
- * Pure orchestration against application ports.
+ * Orchestrates a single outbox polling cycle.
+ * Independently processes claimed rows to prevent a single Kafka failure from rolling back the batch.
  */
 @Injectable()
 export class DispatchPendingOutboxEventsUseCase {

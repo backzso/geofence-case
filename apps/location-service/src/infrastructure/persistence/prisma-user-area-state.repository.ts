@@ -7,26 +7,13 @@ import { TransactionContext } from '../../application/ports/location-transaction
 import { Prisma } from './generated';
 
 /**
- * PrismaUserAreaStateRepository
- *
- * Manages the location.user_area_state table.
- * All methods receive a TransactionContext which is the Prisma transaction client
- * already holding the advisory lock for the user.
- *
- * State model (Option B):
- *   - Only INSIDE rows are stored
- *   - Absence of a row implies the user is outside that area
- *   - Transition: INSERT = ENTER, DELETE = EXIT
- *
- * All writes are guarded by updated_at <= timestamp to prevent
- * older events from overwriting newer state.
+ * Manages user_area_state tracking.
+ * Only stores INSIDE status; absence of a row implies OUTSIDE.
+ * Write paths are strictly guarded by updated_at checks.
  */
 @Injectable()
 export class PrismaUserAreaStateRepository implements IUserAreaStateRepository {
-    /**
-     * Loads all inside-area records for a user.
-     * The advisory lock is already held — no FOR UPDATE needed.
-     */
+
     async loadInsideAreas(
         userId: string,
         tx: TransactionContext,
@@ -47,17 +34,7 @@ export class PrismaUserAreaStateRepository implements IUserAreaStateRepository {
         }));
     }
 
-    /**
-     * Persists state changes within the advisory-locked transaction.
-     *
-     * For exited areas:
-     *   DELETE rows only if updated_at <= incoming timestamp.
-     *
-     * For entered areas:
-     *   Batched INSERT with ON CONFLICT upsert — only updates if existing
-     *   updated_at <= incoming timestamp. Uses a single multi-row INSERT
-     *   to minimize lock hold time under high area fan-out.
-     */
+
     async applyStateChanges(
         userId: string,
         enteredAreaIds: string[],
@@ -77,9 +54,7 @@ export class PrismaUserAreaStateRepository implements IUserAreaStateRepository {
       `;
         }
 
-        // Batched insert for entered areas with upsert guard.
-        // Single multi-row INSERT instead of per-area loop to reduce
-        // round-trips and advisory lock hold time.
+        // Batched insert with ON CONFLICT updated_at guard
         if (enteredAreaIds.length > 0) {
             const valueRows = Prisma.join(
                 enteredAreaIds.map(

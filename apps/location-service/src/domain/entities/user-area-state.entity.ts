@@ -1,23 +1,9 @@
 /**
- * UserAreaState — Domain Entity
- *
- * The aggregate root for geofence membership state.
- * Contains the pure transition computation logic.
- *
- * computeTransitions is a static pure function:
- *   enteredAreaIds = currentInside − previousInside
- *   exitedAreaIds  = previousInside − currentInside
- *
- * No dependency on NestJS, Prisma, or any infrastructure concern.
+ * Aggregate root for geofence membership state.
+ * Computes pure enter/exit transitions via set-difference.
  */
 export class UserAreaState {
-    /**
-     * Computes ENTER and EXIT transitions by diffing two sets of area IDs.
-     *
-     * @param previousInsideAreaIds - areas the user was inside (from DB state)
-     * @param currentInsideAreaIds  - areas the user is inside now (from PostGIS query)
-     * @returns enteredAreaIds (new entries) and exitedAreaIds (departures)
-     */
+
     static computeTransitions(
         previousInsideAreaIds: Set<string>,
         currentInsideAreaIds: Set<string>,

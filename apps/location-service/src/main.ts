@@ -7,7 +7,7 @@ import { HttpExceptionFilter } from './presentation/filters/http-exception.filte
 async function bootstrap(): Promise<void> {
     const app = await NestFactory.create(AppModule);
 
-    // Global validation pipe — rejects invalid payloads before reaching controllers.
+    // Global validation pipe
     app.useGlobalPipes(
         new ValidationPipe({
             transform: true,
@@ -16,7 +16,6 @@ async function bootstrap(): Promise<void> {
         }),
     );
 
-    // Global exception filter — standardized error responses.
     app.useGlobalFilters(new HttpExceptionFilter());
 
     const configService = app.get(ConfigService);
